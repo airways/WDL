@@ -89,6 +89,9 @@ struct HTREEITEM__;
 
 #ifdef __OBJC__
 
+#ifndef MAC_OS_X_VERSION_10_7
+typedef struct _NSDraggingSession NSDraggingSession;
+#endif
 
 #if MAC_OS_X_VERSION_MAX_ALLOWED <= MAC_OS_X_VERSION_10_4
 typedef int NSInteger;
@@ -136,8 +139,15 @@ typedef struct WindowPropRec
 
 
 @interface SWELL_TextField : NSTextField
+{
+  @public
+  bool m_last_dark_mode;
+  bool m_ctlcolor_set;
+}
 - (void)setNeedsDisplay:(BOOL)flag;
 - (void)setNeedsDisplayInRect:(NSRect)rect;
+- (void)drawRect:(NSRect)rect;
+- (void)initColors:(int)darkmode; // -1 to not update darkmode but trigger update of colors
 @end
 
 @interface SWELL_TabView : NSTabView
@@ -173,6 +183,47 @@ typedef struct WindowPropRec
   NSColor *m_fgColor;
   NSMutableArray *m_selColors;
 }
+-(id) init;
+-(void) dealloc;
+-(bool) findItem:(HTREEITEM)item parOut:(HTREEITEM__ **)par idxOut:(int *)idx;
+-(void)mouseDown:(NSEvent *)theEvent;
+-(void)mouseDragged:(NSEvent *)theEvent;
+-(void)mouseUp:(NSEvent *)theEvent;
+- (void)rightMouseUp:(NSEvent *)theEvent;
+- (void)highlightSelectionInClipRect:(NSRect)theClipRect;
+
+// data source
+-(NSInteger) outlineView:(NSOutlineView *)outlineView numberOfChildrenOfItem:(id)item;
+- (BOOL)outlineView:(NSOutlineView *)outlineView isItemExpandable:(id)item;
+- (id)outlineView:(NSOutlineView *)outlineView
+            child:(NSInteger)index
+           ofItem:(id)item;
+- (id)outlineView:(NSOutlineView *)outlineView
+    objectValueForTableColumn:(NSTableColumn *)tableColumn
+           byItem:(id)item;
+
+
+
+- (BOOL)outlineView:(NSOutlineView *)outlineView
+         writeItems:(NSArray *)items
+       toPasteboard:(NSPasteboard *)pasteboard;
+- (BOOL)outlineView:(NSOutlineView *)outlineView
+         acceptDrop:(id<NSDraggingInfo>)info
+               item:(id)item
+         childIndex:(NSInteger)index;
+- (void)outlineView:(NSOutlineView *)outlineView
+    draggingSession:(NSDraggingSession *)session
+       endedAtPoint:(NSPoint)screenPoint
+          operation:(NSDragOperation)operation;
+- (void)outlineView:(NSOutlineView *)outlineView
+    draggingSession:(NSDraggingSession *)session
+   willBeginAtPoint:(NSPoint)screenPoint
+           forItems:(NSArray *)draggedItems;
+- (NSDragOperation)outlineView:(NSOutlineView *)outlineView
+                  validateDrop:(id<NSDraggingInfo>)info
+                  proposedItem:(id)item
+            proposedChildIndex:(NSInteger)index;
+
 @end
 
 @interface SWELL_ListView : NSTableView
@@ -253,9 +304,13 @@ typedef struct WindowPropRec
 @interface SWELL_BoxView : NSBox
 {
   NSInteger m_tag;
+@public
+  int m_etch_mode; // if nonzero, SS_ETCHEDHORZ etc
 }
 -(NSInteger) tag;
 -(void) setTag:(NSInteger)tag;
+-(void) drawRect:(NSRect)r;
+-(int) swellIsEtchBox;
 @end
 
 @interface SWELL_FocusRectWnd : NSView
@@ -300,6 +355,26 @@ typedef struct WindowPropRec
   id m_lastTopLevelOwner; // save a copy of the owner, if any
   id m_access_cacheptrs[6];
   const char *m_classname;
+
+// only used if not SWELL_NO_METAL
+  char m_use_metal; // 1=normal mode, 2=full pipeline (GetDC() etc support). -1 is for non-metal async layered mode. -2 for non-metal non-async layered
+
+  // metal state (if used)
+  char m_metal_dc_dirty;  // used to track state during paint or getdc/releasedc. set to 1 if dirty, 2 if GetDC() but no write yet
+  char m_metal_gravity; // &1=resizing left, &2=resizing top
+  bool m_metal_retina; // last-retina-state, triggered to true by StretchBlt() with a 2:1 ratio
+
+  bool m_metal_in_needref_list;
+  RECT m_metal_in_needref_rect; 
+  NSRect m_metal_lastframe;
+
+  id m_metal_texture; // id<MTLTexture> -- owned if in full pipeline mode, otherwise reference to m_metal_drawable
+  id m_metal_pipelineState; // id<MTLRenderPipelineState> -- only used in full pipeline mode
+  id m_metal_commandQueue; // id<MTLCommandQueue> -- only used in full pipeline mode
+  id m_metal_drawable; // id<CAMetalDrawable> -- only used in normal mode
+  id m_metal_device; // id<MTLDevice> -- set to last-used-device
+  DWORD m_metal_device_lastchkt;
+
 }
 - (id)initChild:(SWELL_DialogResourceIndex *)resstate Parent:(NSView *)parent dlgProc:(DLGPROC)dlgproc Param:(LPARAM)par;
 - (LRESULT)onSwellMessage:(UINT)msg p1:(WPARAM)wParam p2:(LPARAM)lParam;
@@ -361,9 +436,21 @@ typedef struct WindowPropRec
 // Returns the UI Element that has the focus. You can assume that the search for the focus has already been narrowed down to the reciever. Override this method to do a deeper search with a UIElement - e.g. a NSMatrix would determine if one of its cells has the focus.
 - (id)accessibilityFocusedUIElement;
 
+-(void) swellOnControlDoubleClick:(id)sender;
 
+#ifdef MAC_OS_X_VERSION_10_8
+// for radio button with the OSX 10.8+ SDK, see comment in SWELL_MakeControl
+-(void) onSwellCommand0:(id)sender;
+-(void) onSwellCommand2:(id)sender;
+-(void) onSwellCommand3:(id)sender;
+-(void) onSwellCommand4:(id)sender;
+-(void) onSwellCommand5:(id)sender;
+-(void) onSwellCommand6:(id)sender;
+-(void) onSwellCommand7:(id)sender;
+#endif
 
-
+-(BOOL) swellWantsMetal;
+-(void) swellDrawMetal:(const RECT *)forRect;
 @end
 
 @interface SWELL_ModelessWindow : NSWindow
@@ -380,6 +467,7 @@ typedef struct WindowPropRec
 - (id)initModelessForChild:(HWND)child owner:(HWND)owner styleMask:(unsigned int)smask;
 - (void)swellDestroyAllOwnedWindows;
 - (void)swellRemoveOwnedWindow:(NSWindow *)wnd;
+- (void)swellAddOwnedWindow:(NSWindow*)wnd;
 - (void)swellSetOwner:(id)owner;
 - (id)swellGetOwner;
 - (void **)swellGetOwnerWindowHead;
@@ -400,6 +488,7 @@ typedef struct WindowPropRec
 - (id)initDialogBox:(SWELL_DialogResourceIndex *)resstate Parent:(HWND)parent dlgProc:(DLGPROC)dlgproc Param:(LPARAM)par;
 - (void)swellDestroyAllOwnedWindows;
 - (void)swellRemoveOwnedWindow:(NSWindow *)wnd;
+- (void)swellAddOwnedWindow:(NSWindow*)wnd;
 - (void)swellSetOwner:(id)owner;
 - (id)swellGetOwner;
 - (void **)swellGetOwnerWindowHead;
@@ -409,6 +498,13 @@ typedef struct WindowPropRec
 -(int)swellGetModalRetVal;
 -(bool)swellHasModalRetVal;
 @end
+
+#ifndef SWELL_NO_METAL
+void swell_removeMetalDirty(SWELL_hwndChild *slf);
+void swell_updateAllMetalDirty(void);
+void swell_addMetalDirty(SWELL_hwndChild *slf, const RECT *r, bool isReleaseDC=false);
+HDC SWELL_CreateMetalDC(SWELL_hwndChild *);
+#endif
 
 
 @interface SWELL_hwndCarbonHost : SWELL_hwndChild
@@ -454,6 +550,7 @@ typedef struct WindowPropRec
 @public
   LONG m_style;
   WDL_PtrList<char> *m_ids;
+  int m_ignore_selchg; // used to track the last set selection state, to avoid getting feedback notifications
 }
 -(id)init;
 -(void)dealloc;
@@ -482,6 +579,11 @@ typedef struct WindowPropRec
   #endif
 #endif
 
+#ifndef MAC_OS_X_VERSION_10_11
+  // metal requires a recent SDK
+  #define SWELL_NO_METAL
+#endif
+
 struct HGDIOBJ__
 {
   int type;
@@ -491,6 +593,7 @@ struct HGDIOBJ__
   // used by pen/brush
   CGColorRef color;
   int wid;
+  int color_int;
   NSImage *bitmapptr;  
   
   NSMutableDictionary *__old_fontdict; // unused, for ABI compat
@@ -510,6 +613,7 @@ struct HGDIOBJ__
 struct HDC__ {
   CGContextRef ctx; 
   void *ownedData; // always use via SWELL_GetContextFrameBuffer() (which performs necessary alignment)
+  void *metal_ctx; // SWELL_hwndChild, only used if not SWELL_NO_METAL
   HGDIOBJ__ *curpen;
   HGDIOBJ__ *curbrush;
   HGDIOBJ__ *curfont;
@@ -576,6 +680,53 @@ struct HDC__ {
   #else
     typedef float CGFloat;
 #endif
+
+#endif
+
+
+#define NSPOINT_TO_INTS(pt) (int)floor((pt).x+0.5), (int)floor((pt).y+0.5)
+
+#ifdef __OBJC__
+static WDL_STATICFUNC_UNUSED void NSPOINT_TO_POINT(POINT *p, const NSPoint &pt)
+{
+  p->x = (int)floor(pt.x+0.5);
+  p->y = (int)floor((pt).y+0.5);
+}
+static WDL_STATICFUNC_UNUSED void NSRECT_TO_RECT(RECT *r, const NSRect &tr)
+{
+  r->left=(int)floor(tr.origin.x+0.5);
+  r->right=(int)floor(tr.origin.x+tr.size.width+0.5);
+  r->top=(int)floor(tr.origin.y+0.5);
+  r->bottom=(int)floor(tr.origin.y+tr.size.height+0.5);
+}
+#endif
+
+
+#ifdef SWELL_IMPLEMENT_GETOSXVERSION
+
+SWELL_IMPLEMENT_GETOSXVERSION int SWELL_GetOSXVersion()
+{
+  static SInt32 v;
+  if (!v)
+  {
+    if (NSAppKitVersionNumber >= 1266.0)
+    {
+      if (NSAppKitVersionNumber >= 1670.0)  // unsure if this is correct (10.14.1 is 1671.1)
+        v = 0x10d0;
+      else if (NSAppKitVersionNumber >= 1404.0)
+        v = 0x10b0;
+      else
+        v = 0x10a0; // 10.10+ Gestalt(gsv) return 0x109x, so we bump this to 0x10a0
+    }
+    else
+    {
+      SInt32 a = 0x1040;
+      Gestalt(gestaltSystemVersion,&a);
+      v=a;
+    }
+  }
+  return v;
+}
 
 #endif
 
@@ -757,8 +908,6 @@ HWND GetFocusIncludeMenus();
 void SWELL_RunEvents();
 
 bool swell_isOSwindowmenu(SWELL_OSWINDOW osw);
-
-bool swell_is_virtkey_char(int c);
 
 void swell_on_toplevel_raise(SWELL_OSWINDOW wnd); // called by swell-generic-gdk when a window is focused
 
@@ -1002,6 +1151,7 @@ static void __listview_mergesort_internal(void *base, size_t nmemb, size_t size,
   f(menubar_spacing_width, 8) \
   f(menubar_margin_width, 6) \
   f(scrollbar_width, 14) \
+  f(smscrollbar_width, 16) \
   f(scrollbar_min_thumb_height, 4) \
   f(combo_height, 20) \
 
@@ -1104,6 +1254,7 @@ void swell_scaling_init(bool no_auto_hidpi);
 extern int g_swell_ui_scale;
 extern swell_colortheme g_swell_ctheme;
 extern const char *g_swell_deffont_face;
+HFONT SWELL_GetDefaultFont(void);
 
 #endif
 
